@@ -2,7 +2,6 @@ package graceful
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -14,8 +13,7 @@ import (
 
 var logger = slog.Default().With("component", "graceful_shutdown")
 
-// SetLogger allows setting a custom logger for graceful shutdown operations,
-// or disables logging by using io.Discard.
+// SetLogger allows setting a custom logger or disable logging altogether by passing nil.
 func SetLogger(l *slog.Logger) {
 	if l == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -36,12 +34,13 @@ func Shutdown(
 	timeout time.Duration,
 	ops map[string]Operation,
 	signals ...os.Signal,
-) <-chan struct{} {
+) (<-chan struct{}, <-chan error) {
 	if len(signals) == 0 {
 		signals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
 	}
 
 	wait := make(chan struct{})
+	errs := make(chan error, len(ops))
 
 	go func() {
 		s := make(chan os.Signal, 1)
@@ -62,11 +61,8 @@ func Shutdown(
 			wg.Add(1)
 			go func(key string, op Operation) {
 				defer wg.Done()
-				logger.Info(fmt.Sprintf("Cleaning up: %s", key))
 				if err := op(shutdownCtx); err != nil {
-					logger.Error("Cleanup failed", "component", key, "error", err)
-				} else {
-					logger.Info("Component shutdown successfully", "component", key)
+					errs <- err
 				}
 			}(key, op)
 		}
@@ -75,5 +71,5 @@ func Shutdown(
 		close(wait)
 	}()
 
-	return wait
+	return wait, errs
 }
